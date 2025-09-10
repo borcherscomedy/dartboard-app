@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dartboard Auto‑Score MVP</title>
+  <style>
+    :root { --bg:#0b0d10; --fg:#e8eef2; --muted:#9fb0bf; --acc:#5eead4; --card:#131820; --warn:#f59e0b; --good:#22c55e; --bad:#ef4444; }
+    html,body { height:100%; margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji; background:var(--bg); color:var(--fg); }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    .sub { color: var(--muted); font-size: .95rem; margin-bottom: 16px; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(12, 1fr); }
+    .card { background: var(--card); border: 1px solid #1e2633; border-radius: 16px; padding: 12px; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+    button, select, input, textarea { background:#0f141b; color:var(--fg); border:1px solid #263142; border-radius:12px; padding:10px 12px; font-size:14px; }
+    button { cursor:pointer; }
+    button.primary { background: var(--acc); color:#06221d; font-weight: 700; }
+    button.ghost { background: transparent; border-color:#2a394a; }
+    button:disabled { opacity:.5; cursor:not-allowed }
+    textarea { width:100%; min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .pill { padding:6px 10px; border-radius:999px; background:#0e1520; border:1px solid #283547; color:var(--muted); font-size:12px; }
+    .section-title { font-weight:700; margin-bottom:8px; font-size:0.95rem }
+    .muted { color:var(--muted); }
+    .flex { display:flex; gap:8px; align-items:center }
+    .col { display:flex; flex-direction:column; gap:8px }
+    canvas, video { max-width: 100%; border-radius: 12px; display:block; }
+    .tabs { display:flex; gap:8px; margin: 12px 0; }
+    .tabs button { padding: 10px 14px; border-radius: 999px; border:1px solid #2a394a; background:#0d141c; }
+    .tabs button.active { background: var(--acc); color:#041f1b; font-weight:700; }
+    .scorebig { font-size: 2.2rem; font-weight:800; }
+    .scores { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:8px; }
+    .scorecard { background: #0e1320; border:1px dashed #2a3444; border-radius: 12px; padding:10px }
+    .kbd { font-family: ui-monospace, Menlo, Consolas, monospace; background:#0a0f16; border:1px solid #283243; padding:2px 6px; border-radius:6px }
+    .hotbar { display:flex; gap:6px; flex-wrap:wrap }
+    .chip { border:1px solid #2a394a; padding:6px 10px; border-radius: 999px; }
+    .accent { color: var(--acc) }
+    .hint { font-size: 12px; color: var(--muted); }
+    .footer { margin-top: 16px; color: var(--muted); font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🎯 Dartboard Auto‑Score MVP</h1>
+    <div class="sub">Two‑device setup: <b>iPhone</b> runs Camera Mode (tap tip to score), <b>iPad</b> runs Scoreboard Mode. Uses WebRTC (no server) with copy‑paste signaling.</div>
+
+    <div class="tabs">
+      <button id="tabCamera" class="active">📷 Camera (iPhone)</button>
+      <button id="tabScore">📋 Scoreboard (iPad)</button>
+      <button id="tabPair">🔗 Pair Devices</button>
+      <span class="pill" id="connBadge">Not connected</span>
+    </div>
+
+    <!-- Pairing -->
+    <div id="pairPane" class="card" style="display:none">
+      <div class="grid">
+        <div class="col" style="grid-column: span 12">
+          <div class="section-title">WebRTC pairing (local, no server)</div>
+          <div class="muted">Open this same page on both devices over HTTPS. Choose which device is <b>Host</b> (usually iPhone), make an <b>Offer</b>, paste that Offer into the other device as <b>Remote SDP</b>, generate an <b>Answer</b> there, then paste the Answer back here. Once connected, scores will sync instantly.</div>
+        </div>
+        <div class="col" style="grid-column: span 12">
+          <div class="row">
+            <button id="btnMakeOffer" class="primary">Make Offer (Host)</button>
+            <button id="btnMakeAnswer">Make Answer (Guest)</button>
+            <button id="btnApplyRemote" class="ghost">Apply Remote SDP</button>
+            <button id="btnReset" class="ghost">Reset</button>
+          </div>
+        </div>
+        <div class="col" style="grid-column: span 12">
+          <div class="section-title">Your SDP</div>
+          <textarea id="localSDP" placeholder="Click Make Offer / Make Answer"></textarea>
+        </div>
+        <div class="col" style="grid-column: span 12">
+          <div class="section-title">Remote SDP</div>
+          <textarea id="remoteSDP" placeholder="Paste Offer/Answer from the other device"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Camera Mode (iPhone) -->
+    <div id="camPane" class="card">
+      <div class="grid">
+        <div class="col" style="grid-column: span 12">
+          <div class="row"><span class="section-title">Live camera</span><span class="hint">Allow camera permission. Tap four points to calibrate: <b>center</b>, <b>outer bull edge</b>, <b>triple inner edge</b>, <b>double outer edge</b>.</span></div>
+          <video id="video" playsinline autoplay muted style="width:100%; max-height: 50vh; background:#0b0f15"></video>
+          <canvas id="overlay" style="position:relative; margin-top:-50vh; width:100%; max-height: 50vh; pointer-events:none"></canvas>
+        </div>
+
+        <div class="col" style="grid-column: span 12">
+          <div class="row hotbar">
+            <button id="btnStartCam" class="primary">Start Camera</button>
+            <button id="btnClearCal" class="ghost">Clear Calibration</button>
+            <button id="btnToggleTap" class="ghost">Tap‑to‑Score: OFF</button>
+            <span class="chip">px/mm: <span id="pxmm">—</span></span>
+            <span class="chip">Cal points: <span id="calCount">0</span>/4</span>
+            <span class="chip">Last: <span id="lastScore">—</span></span>
+          </div>
+        </div>
+
+        <div class="col" style="grid-column: span 12">
+          <div class="muted">MVP flow: after calibrating, toggle <b>Tap‑to‑Score</b> then tap the dart tip location on the video to score that dart. (Impact auto‑detect can be added later.)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scoreboard (iPad) -->
+    <div id="scorePane" class="card" style="display:none">
+      <div class="grid">
+        <div class="col" style="grid-column: span 12">
+          <div class="row">
+            <div class="section-title">Scoreboard</div>
+            <span class="chip">Game: <select id="gameMode"><option value="501">501</option><option value="301">301</option><option value="countup">Count‑Up</option></select></span>
+            <button id="btnResetGame" class="ghost">Reset Game</button>
+          </div>
+        </div>
+        <div class="col" style="grid-column: span 12">
+          <div class="scores">
+            <div class="scorecard">
+              <div class="muted">Player A</div>
+              <div class="scorebig" id="pA">501</div>
+            </div>
+            <div class="scorecard">
+              <div class="muted">Player B</div>
+              <div class="scorebig" id="pB">501</div>
+            </div>
+          </div>
+        </div>
+        <div class="col" style="grid-column: span 12">
+          <div class="row">
+            <button id="btnSwitch" class="ghost">Switch Player</button>
+            <button id="btnUndo" class="ghost">Undo</button>
+          </div>
+        </div>
+        <div class="col" style="grid-column: span 12">
+          <div class="muted">Scores from the iPhone will appear here instantly once paired. Use Switch Player to alternate turns.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">Tip: Add this page to your Home Screen on iPhone/iPad to run as a fullscreen PWA.</div>
+  </div>
+
+<script>
+// ------- Geometry + Scoring -------
+const SECTORS = [20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5]; // clockwise, 20 at top
+const R = { // standard steel-tip radii in mm (tweak per board brand)
+  inner_bull: 6.35,
+  outer_bull: 15.9,
+  triple_inner: 99.0,
+  triple_outer: 107.0,
+  double_inner: 162.0,
+  double_outer: 170.0,
+};
+let pxPerMm = null;
+let centerPx = null;
+let calPts = []; // [center, OB edge, TRI inner, DO outer]
+
+function angleToSector(thetaRad){
+  // 0 rad is +x. Sector 20 is at +y => rotate +90deg
+  const t = (thetaRad + Math.PI/2) % (2*Math.PI);
+  let idx = Math.floor((t * 180 / Math.PI) / 18) % 20; // 20 wedges, 18°
+  if (idx < 0) idx += 20;
+  return SECTORS[idx];
+}
+function ringFromR(rmm){
+  if (rmm <= R.inner_bull) return ["IB", 50];
+  if (rmm <= R.outer_bull) return ["OB", 25];
+  if (rmm >= R.triple_inner && rmm <= R.triple_outer) return ["T", null];
+  if (rmm >= R.double_inner && rmm <= R.double_outer) return ["D", null];
+  if (rmm > R.double_outer) return ["OFF", 0];
+  return ["S", null];
+}
+function scoreFromXYmm(xmm, ymm){
+  const r = Math.hypot(xmm, ymm);
+  const [ring, base] = ringFromR(r);
+  if (ring === "OFF") return [0, "OFF"];
+  if (ring === "IB") return [50, "IB"];
+  if (ring === "OB") return [25, "OB"];
+  const sector = angleToSector(Math.atan2(ymm, xmm));
+  if (ring === "T") return [3*sector, "T"];
+  if (ring === "D") return [2*sector, "D"];
+  return [sector, "S"];
+}
+
+// ------- Camera + Tap‑to‑Score MVP -------
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const pxmmEl = document.getElementById('pxmm');
+const calCountEl = document.getElementById('calCount');
+const lastScoreEl = document.getElementById('lastScore');
+let tapToScore = false;
+
+async function startCamera(){
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    sizeOverlay();
+  } catch (e){
+    alert('Camera failed: ' + e);
+  }
+}
+function sizeOverlay(){
+  overlay.width = video.videoWidth || video.clientWidth;
+  overlay.height = video.videoHeight || video.clientHeight;
+}
+window.addEventListener('resize', sizeOverlay);
+
+function drawOverlay(){
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0,0,overlay.width, overlay.height);
+  // calibration points
+  ctx.fillStyle = '#5eead4';
+  ctx.strokeStyle = '#5eead4';
+  ctx.lineWidth = 2;
+  calPts.forEach((p,i)=>{
+    ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, 2*Math.PI); ctx.fill();
+    ctx.fillText(String(i+1), p.x+8, p.y-8);
+  });
+  // center marker
+  if (centerPx){ ctx.beginPath(); ctx.arc(centerPx.x, centerPx.y, 6, 0, 2*Math.PI); ctx.stroke(); }
+}
+
+function updateScale(){
+  if (calPts.length < 4) return;
+  centerPx = calPts[0];
+  const dob = calPts[3];
+  const r_px = Math.hypot(dob.x - centerPx.x, dob.y - centerPx.y);
+  pxPerMm = r_px / R.double_outer;
+  pxmmEl.textContent = pxPerMm.toFixed(2);
+}
+
+overlay.addEventListener('click', (ev)=>{
+  // translate click to video coords
+  const rect = overlay.getBoundingClientRect();
+  const x = (ev.clientX - rect.left) * (overlay.width / rect.width);
+  const y = (ev.clientY - rect.top) * (overlay.height / rect.height);
+
+  if (calPts.length < 4){
+    calPts.push({x,y});
+    calCountEl.textContent = String(calPts.length);
+    if (calPts.length === 1) centerPx = calPts[0];
+    if (calPts.length === 4) updateScale();
+    drawOverlay();
+    return;
+  }
+
+  if (!tapToScore){ return; }
+  if (!centerPx || !pxPerMm){ alert('Calibrate first: tap 4 points.'); return; }
+  const dx = (x - centerPx.x) / pxPerMm;
+  const dy = (y - centerPx.y) / pxPerMm;
+  const [pts, ring] = scoreFromXYmm(dx, dy);
+  lastScoreEl.textContent = `${pts} (${ring})`;
+  sendScore(pts, ring, {x, y});
+
+  // visual blip
+  const ctx = overlay.getContext('2d');
+  ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x,y, 12, 0, 2*Math.PI); ctx.stroke();
+});
+
+// ------- WebRTC (data‑only, manual signaling) -------
+let pc = null; let dc = null; let isConnected = false;
+const connBadge = document.getElementById('connBadge');
+const localSDP = document.getElementById('localSDP');
+const remoteSDP = document.getElementById('remoteSDP');
+
+function setConnBadge(){ connBadge.textContent = isConnected? 'Connected' : 'Not connected'; connBadge.style.background = isConnected? '#052b27' : '#20151a'; connBadge.style.border = '1px solid ' + (isConnected? '#0c7e6e' : '#3a2a35'); connBadge.style.color = isConnected? '#69f0d1' : '#e8eef2'; }
+setConnBadge();
+
+function newPC(){
+  pc = new RTCPeerConnection({ iceServers: [{urls: 'stun:stun.l.google.com:19302'}] });
+  pc.onicecandidate = () => { if (pc.localDescription) localSDP.value = JSON.stringify(pc.localDescription); };
+  pc.onconnectionstatechange = ()=>{ isConnected = (pc.connectionState === 'connected'); setConnBadge(); };
+  pc.ondatachannel = (ev)=>{ dc = ev.channel; wireDC(); };
+}
+function wireDC(){
+  dc.onopen = ()=>{ isConnected = true; setConnBadge(); };
+  dc.onmessage = (ev)=>{ try { const msg = JSON.parse(ev.data); onIncoming(msg); } catch(e){} };
+}
+function send(msg){ if (dc && dc.readyState === 'open') dc.send(JSON.stringify(msg)); }
+
+async function makeOffer(){
+  newPC();
+  dc = pc.createDataChannel('scores');
+  wireDC();
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  localSDP.value = JSON.stringify(pc.localDescription);
+}
+async function makeAnswer(){
+  newPC();
+  const desc = JSON.parse(remoteSDP.value);
+  await pc.setRemoteDescription(desc);
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  localSDP.value = JSON.stringify(pc.localDescription);
+}
+async function applyRemote(){
+  const desc = JSON.parse(remoteSDP.value);
+  await pc.setRemoteDescription(desc);
+}
+function resetRT(){ if (pc) pc.close(); pc = null; dc = null; isConnected=false; setConnBadge(); localSDP.value=''; remoteSDP.value=''; }
+
+// ------- Game State (Scoreboard) -------
+let game = { mode:'501', players:[{name:'A', score:501}, {name:'B', score:501}], turn:0, history:[] };
+function setMode(m){ game.mode = m; const start = (m==='countup')? 0 : Number(m); game.players.forEach(p=>p.score=start); game.history=[]; game.turn=0; renderScores(); }
+function renderScores(){
+  const start = (game.mode==='countup')? 0 : Number(game.mode);
+  document.getElementById('pA').textContent = game.players[0].score;
+  document.getElementById('pB').textContent = game.players[1].score;
+}
+function applyScore(pts){
+  const p = game.players[game.turn];
+  if (game.mode==='countup') { p.score += pts; }
+  else {
+    const next = p.score - pts;
+    if (next >= 0) p.score = next; // (no bust logic in MVP)
+  }
+  game.history.push({turn:game.turn, pts});
+  renderScores();
+}
+function undo(){ const h = game.history.pop(); if (!h) return; const p = game.players[h.turn]; if (game.mode==='countup') p.score -= h.pts; else p.score += h.pts; renderScores(); }
+function switchPlayer(){ game.turn = (game.turn+1)%2; }
+
+// Incoming messages
+function onIncoming(msg){
+  if (msg.type==='score'){ applyScore(msg.pts); }
+  if (msg.type==='hello'){ send({type:'helloAck'}); }
+}
+function sendScore(pts, ring, pt){ send({type:'score', pts, ring, pt}); applyScore(pts); }
+
+// ------- UI wiring -------
+const tabCamera = document.getElementById('tabCamera');
+const tabScore = document.getElementById('tabScore');
+const tabPair = document.getElementById('tabPair');
+const camPane = document.getElementById('camPane');
+const scorePane = document.getElementById('scorePane');
+const pairPane = document.getElementById('pairPane');
+
+function showPane(which){ camPane.style.display = (which==='cam')?'block':'none'; scorePane.style.display=(which==='score')?'block':'none'; pairPane.style.display=(which==='pair')?'block':'none';
+  tabCamera.classList.toggle('active', which==='cam');
+  tabScore.classList.toggle('active', which==='score');
+  tabPair.classList.toggle('active', which==='pair');
+}
+
+tabCamera.onclick = ()=> showPane('cam');
+ tabScore.onclick = ()=> showPane('score');
+ tabPair.onclick = ()=> showPane('pair');
+
+// Buttons
+ document.getElementById('btnStartCam').onclick = startCamera;
+ document.getElementById('btnClearCal').onclick = ()=>{ calPts=[]; centerPx=null; pxPerMm=null; pxmmEl.textContent='—'; calCountEl.textContent='0'; drawOverlay(); };
+ document.getElementById('btnToggleTap').onclick = (e)=>{ tapToScore = !tapToScore; e.target.textContent = 'Tap‑to‑Score: ' + (tapToScore?'ON':'OFF'); };
+ document.getElementById('btnMakeOffer').onclick = makeOffer;
+ document.getElementById('btnMakeAnswer').onclick = makeAnswer;
+ document.getElementById('btnApplyRemote').onclick = applyRemote;
+ document.getElementById('btnReset').onclick = resetRT;
+ document.getElementById('btnResetGame').onclick = ()=> setMode(document.getElementById('gameMode').value);
+ document.getElementById('btnSwitch').onclick = switchPlayer;
+ document.getElementById('btnUndo').onclick = undo;
+ document.getElementById('gameMode').onchange = (e)=> setMode(e.target.value);
+
+// init
+showPane('cam');
+renderScores();
+sizeOverlay();
+
+</script>
+</body>
+</html>
